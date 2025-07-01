@@ -1,0 +1,30 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# TensorBoard logs
+*.tfevents.*
+model/logs/
+logs/
+
+# Runtime files
+nohup.out
+*.log
+
+# Model weights and data
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.ckpt
+*.npz
+*.zip
+
+# VS Code
+.vscode/
+
+# Wget log
+wget-log*
+
+# Submodule or large directories
+model/mamba
