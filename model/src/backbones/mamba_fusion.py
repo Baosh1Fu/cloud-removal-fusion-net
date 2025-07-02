@@ -17,31 +17,56 @@ def get_norm_layer(channels, num_feats, n_groups=4, layer_type='group'):
     else:
         return nn.Identity()
 
-def monig_fusion(pred_list, weights=None):
-    n = len(pred_list)
-    if weights is None:
-        weights = [1.0 / n] * n
-    else:
-        weights = [w / sum(weights) for w in weights]
+# ---------------------------- Decoder ----------------------------
+class Decoder(nn.Module):
+    def __init__(self, decoder_widths, out_channels, covmode='diag', norm_type='group', n_groups=4):
+        super().__init__()
+        self.decoder_blocks = nn.ModuleList()
+        for i in range(len(decoder_widths)):
+            in_c = decoder_widths[i - 1] if i > 0 else decoder_widths[0]
+            out_c = decoder_widths[i]
+            self.decoder_blocks.append(nn.Sequential(
+                nn.Conv2d(in_c, out_c, 3, padding=1),
+                get_norm_layer(out_c, out_c, n_groups, norm_type),
+                nn.ReLU(inplace=True)
+            ))
 
-    deltas = torch.stack([p['delta'] for p in pred_list], dim=0)
-    gammas = torch.stack([p['gamma'] for p in pred_list], dim=0)
-    alphas = torch.stack([p['alpha'] for p in pred_list], dim=0)
-    betas  = torch.stack([p['beta']  for p in pred_list], dim=0)
+        self.delta_head = nn.Conv2d(decoder_widths[-1], out_channels, 1)
+        self.gamma_head = nn.Sequential(
+            nn.Conv2d(decoder_widths[-1], out_channels, 1),
+            nn.Softplus()
+        )
+        self.alpha_head = nn.Sequential(
+            nn.Conv2d(decoder_widths[-1], out_channels, 1),
+            nn.Softplus()
+        )
 
-    w = torch.tensor(weights, device=deltas.device).view(n, 1, 1, 1, 1, 1)
+        if covmode == 'diag':
+            beta_out_dim = out_channels
+        elif covmode == 'iso':
+            beta_out_dim = 1
+        elif covmode == 'uni':
+            beta_out_dim = out_channels
+        elif covmode == 'full':
+            beta_out_dim = out_channels * out_channels
+        else:
+            raise ValueError(f"Unsupported covmode: {covmode}")
 
-    fused_delta = torch.sum(w * deltas, dim=0)
-    fused_gamma = torch.sum(w * gammas, dim=0)
-    fused_alpha = torch.sum(w * alphas, dim=0)
-    fused_beta  = torch.sum(w * betas,  dim=0)
+        self.beta_head = nn.Sequential(
+            nn.Conv2d(decoder_widths[-1], beta_out_dim, 1),
+            nn.Softplus()
+        )
 
-    return {
-        'delta': fused_delta,
-        'gamma': fused_gamma,
-        'alpha': fused_alpha,
-        'beta':  fused_beta
-    }
+    def forward(self, x, skips=None):
+        for block in self.decoder_blocks:
+            x = block(x)
+
+        delta = self.delta_head(x)
+        gamma = self.gamma_head(x)
+        alpha = self.alpha_head(x)
+        beta  = self.beta_head(x)
+
+        return delta, gamma, alpha, beta
 
 # ---------------------------- Blocks ----------------------------
 class ResidualConv(nn.Module):
@@ -112,6 +137,7 @@ class MambaBlock(nn.Module):
         x_time = 0.5 * x_time_global + 0.5 * x_time_ds
         return x_spatial + x_local + x_time
 
+# ---------------------------- Temporal Encoder ----------------------------
 class TemporalEncoder(nn.Module):
     def __init__(self, widths, d_state=16, expand=2.0, norm_type='group', n_groups=4):
         super().__init__()
@@ -139,25 +165,24 @@ class TemporalEncoder(nn.Module):
         self.final_mamba_block = MambaBlock(widths[-1], d_state=d_state, expand=expand)
 
     def forward(self, x):
-        skips = []
         for conv, mamba in zip(self.layers, self.mamba_blocks):
             x = conv(x)
             x_tavg = x.mean(dim=2)
             x = mamba(x_tavg) + x_tavg
-            skips.append(x)
         x = x.unsqueeze(2)
         x = self.final_encoder_conv(x)
         x_tavg = x.mean(dim=2)
         x = self.final_mamba_block(x_tavg) + x_tavg
-        skips.append(x)
-        return x, skips
+        return x
 
+# ---------------------------- Full Model ----------------------------
 class UNCRTAINTS_Mamba3D(nn.Module):
     def __init__(self, input_dim, output_dim=S2_BANDS, encoder_widths=[128, 128], decoder_widths=[128, 128], d_state=16, covmode='diag', scale_by=1.0, norm_type='group'):
         super().__init__()
         self.output_dim = output_dim
         self.scale_by = scale_by
         self.covmode = covmode
+
         self.input_projection = nn.Conv3d(input_dim, encoder_widths[0], kernel_size=3, padding=1)
         self.pre_encoder_conv = nn.Sequential(
             nn.Conv3d(encoder_widths[0], encoder_widths[0], kernel_size=3, padding=1),
@@ -168,35 +193,19 @@ class UNCRTAINTS_Mamba3D(nn.Module):
             nn.ReLU(inplace=True),
         )
         self.encoder = TemporalEncoder(widths=encoder_widths, d_state=d_state, expand=2.0, norm_type=norm_type)
-        self.decoder = Decoder(decoder_widths, output_dim=output_dim, covmode=covmode, norm_type=norm_type)
+        self.decoder = Decoder(decoder_widths, out_channels=output_dim, covmode=covmode, norm_type=norm_type)
 
     def forward(self, x, batch_positions=None):
         B, T, C, H, W = x.shape
         x = rearrange(x, 'b t c h w -> b c t h w')
         x = self.input_projection(x)
         x = self.pre_encoder_conv(x)
-        feat, skips = self.encoder(x)
-        delta, gamma, alpha, beta, aux = self.decoder(feat, skips)
+        feat = self.encoder(x)
+        delta, gamma, alpha, beta = self.decoder(feat, skips=None)
 
-        delta = delta.view(B, 1, self.output_dim, H, W)
-        gamma = gamma.view(B, 1, self.output_dim, H, W)
-        alpha = alpha.view(B, 1, self.output_dim, H, W)
-        beta  = beta.view(B, 1, self.output_dim, H, W)
-
-        aux_outputs = []
-        for d in aux:
-            aux_outputs.append({
-                'delta': d['delta'].view(B, 1, self.output_dim, H, W),
-                'gamma': d['gamma'].view(B, 1, self.output_dim, H, W),
-                'alpha': d['alpha'].view(B, 1, self.output_dim, H, W),
-                'beta':  d['beta'].view(B, 1, self.output_dim, H, W),
-            })
-
-        output = monig_fusion(aux_outputs + [{
-            'delta': delta,
-            'gamma': gamma,
-            'alpha': alpha,
-            'beta': beta
-        }])
-
-        return output
+        return {
+            'delta': delta.view(B, 1, self.output_dim, H, W),
+            'gamma': gamma.view(B, 1, self.output_dim, H, W),
+            'alpha': alpha.view(B, 1, self.output_dim, H, W),
+            'beta':  beta.view(B, 1, self.output_dim, H, W),
+        }

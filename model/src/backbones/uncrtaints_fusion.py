@@ -336,12 +336,8 @@ class UNCRTAINTS(nn.Module):
             for c in decoder_widths
         ])
 
-        # NIG output heads
+        # Only one NIG output head at the end
         self.main_nig_head = NIGHead(decoder_widths[0], S2_BANDS)
-        self.aux_nig_heads = nn.ModuleList([
-            NIGHead(decoder_widths[1], S2_BANDS),
-            NIGHead(decoder_widths[3], S2_BANDS)
-        ])
 
     def forward(self, x, batch_positions=None):
         B, T, C, H, W = x.shape
@@ -370,22 +366,14 @@ class UNCRTAINTS(nn.Module):
         if out.dim() == 5:
             out = out.view(B*T, out.size(2), H, W)
 
-        nig_outputs = []
-        for i, layer in enumerate(self.out_block):
+        for layer in self.out_block:
             out = layer.smart_forward(out)
-            if i in [1, 3]:
-                head_idx = 0 if i == 1 else 1
-                aux_nig_out = self.aux_nig_heads[head_idx](out, B, T, H, W)
-                nig_outputs.append(aux_nig_out)
 
         main_nig_out = self.main_nig_head(out, B, T, H, W)
-        nig_outputs.append(main_nig_out)
-
-        fused_out = monig_fusion(nig_outputs)
 
         return {
-            'delta': fused_out['delta'],
-            'gamma': fused_out['gamma'],
-            'alpha': fused_out['alpha'],
-            'beta':  fused_out['beta'],
+            'delta': main_nig_out['delta'],
+            'gamma': main_nig_out['gamma'],
+            'alpha': main_nig_out['alpha'],
+            'beta':  main_nig_out['beta'],
         }

@@ -50,7 +50,7 @@ if config.pretrain:  # pre-training is on a single time point
     if config.model=='unet': config.batch_size = 32
     config.positional_encoding = False
 
-if config.loss in ['GNLL', 'MGNLL']:
+if config.loss in ['GNLL', 'MGNLL' ]:
     # for univariate losses, default to univariate mode (batched across channels)
     if config.loss in ['GNLL']: config.covmode = 'uni' 
 
@@ -208,7 +208,7 @@ def log_aleatoric(writer, config, mode, step, var, name, img_meter=None):
     q50, q75    = q50[0], q75[0] # take batch's first item as a summary
     binning     = 256 # see: https://pytorch.org/docs/stable/tensorboard.html#torch.utils.tensorboard.writer.SummaryWriter.add_histogram
 
-    if config.loss in ["GNLL", 'MGNLL','fusion_net']:
+    if config.loss in ["GNLL", 'MGNLL' ]:
         writer.add_image(f'Img/{mode}/{name}aleatoric [0,1]', avg_var[0,0,...].clip(0, 1), step, dataformats='CHW') # map image to [0, 1]
         writer.add_image(f'Img/{mode}/{name}aleatoric [0,q75]', avg_var[0,0,...].clip(0.0, q75)/q75, step, dataformats='CHW') # map image to [0, q75]
         writer.add_histogram(f'Hist/{mode}/{name}aleatoric', avg_var[0,0,...].flatten().clip(0,1), step, bins=binning, max_bins=binning)
@@ -318,21 +318,21 @@ def iterate(model, data_loader, config, writer, mode="train", epoch=None, device
                 for bdx in range(batch_size):
                     # only compute statistics on variance estimates if using e.g. NLL loss or combinations thereof
                     
-                    if config.loss in ['GNLL', 'MGNLL','fusion_net']:
+                    if config.loss in ['GNLL', 'MGNLL' ]:
                         
                         # if the variance variable is of shape [B x 1 x C x C x H x W] then it's a covariance tensor
                         if len(var.shape) > 5: 
                             covar = var
                             # get [B x 1 x C x H x W] variance tensor
                             var   = var.diagonal(dim1=2, dim2=3).moveaxis(-1,2)
-
-                        extended_metrics = img_metrics(y[bdx], out[bdx], var=var[bdx])
+                        #print('model',model)
+                        extended_metrics = img_metrics(y[bdx], out[bdx], var=var[bdx], model=model)
                         vars_aleatoric.append(extended_metrics['mean var']) 
                         errs.append(extended_metrics['error'])
                         errs_se.append(extended_metrics['mean se'])
                         errs_ae.append(extended_metrics['mean ae'])
                     else:
-                        extended_metrics = img_metrics(y[bdx], out[bdx])
+                        extended_metrics = img_metrics(y[bdx], out[bdx],model=model)
                     
                     img_meter.add(extended_metrics)
                     idx = (i*batch_size+bdx) # plot and export every k-th item
@@ -380,7 +380,7 @@ def iterate(model, data_loader, config, writer, mode="train", epoch=None, device
             # periodically log stats
             if step%config.display_step==0:
                 out, x, y, in_m = out.cpu(), x.cpu(), y.cpu(), in_m.cpu()
-                if config.loss in ['GNLL', 'MGNLL','fusion_net']:
+                if config.loss in ['GNLL', 'MGNLL' ]:
                     var = var.cpu()
                     log_train(writer, config, model, step, x, out, y, in_m, var=var)
                 else:
@@ -436,7 +436,7 @@ def iterate(model, data_loader, config, writer, mode="train", epoch=None, device
 
 
         # compute Expected Calibration Error (ECE)
-        if config.loss in ['GNLL', 'MGNLL','fusion_net']:
+        if config.loss in ['GNLL', 'MGNLL' ]:
             sorted_errors_se   = compute_ece(vars_aleatoric, errs_se, len(data_loader.dataset), percent=5)
             sorted_errors      = {'se_sortAleatoric': sorted_errors_se}
             plot_discard(sorted_errors['se_sortAleatoric'], config, mode, step, is_se=True)
@@ -448,7 +448,7 @@ def iterate(model, data_loader, config, writer, mode="train", epoch=None, device
             img_meter.value()['UCE SE']  = uce_l2.cpu().numpy().item()
             img_meter.value()['AUCE SE'] = auce_l2.cpu().numpy().item()
 
-        if config.loss in ['GNLL', 'MGNLL','fusion_net']:
+        if config.loss in ['GNLL', 'MGNLL' ]:
             log_aleatoric(writer, config, mode, step, var,  f'model/', img_meter)
 
         return metrics, img_meter.value()
