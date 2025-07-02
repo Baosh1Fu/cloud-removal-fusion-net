@@ -20,6 +20,7 @@ class FusionModel(BaseModel):
             self.out_mamba,
             self.out_fused,
             self.y_img,
+            #self.masks
         )
         self.loss_G = total_loss
         self.aux_info = aux

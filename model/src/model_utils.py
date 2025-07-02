@@ -3,7 +3,7 @@ import torch
 
 sub_dir = os.path.join(os.getcwd(), 'model')
 if os.path.isdir(sub_dir): os.chdir(sub_dir)
-from src.backbones import base_model_fusion, base_model, utae, uncrtaints, uncrtaints_convmamba, Fmamba_cr, fmamba, conv3d_mamba, fusion_net, uncrtaints_fusion, mamba_fusion
+from src.backbones import base_model_fusion, base_model, utae, uncrtaints, conv3d_mamba, fusion_net, uncrtaints_fusion, mamba_fusion
 from src.backbones.base_model_fusion import FusionModel
 from src.backbones.base_model import BaseModel
 import math

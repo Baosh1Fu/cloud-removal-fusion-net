@@ -18,11 +18,11 @@ class Metric(object):
 
 
 def img_metrics(target, pred, var=None, pixelwise=True, model=None):
-    #if var is None and model is not None and hasattr(model, "net_out"):
-     #   if all(k in model.net_out for k in ["alpha_fuse", "beta_fuse"]):
-      #      alpha = model.net_out["alpha_fuse"]
-       #     beta = model.net_out["beta_fuse"]
-        #    var = beta / (alpha - 1.0 + 1e-6)
+    if var is None and model is not None and hasattr(model, "net_out"):
+        if all(k in model.net_out for k in ["alpha_fuse", "beta_fuse"]):
+            alpha = model.net_out["alpha_fuse"]
+            beta = model.net_out["beta_fuse"]
+            var = beta / (alpha - 1.0 + 1e-6)
             #print("var.shape",var.shape)
     rmse = torch.sqrt(torch.mean(torch.square(target - pred)))
     psnr = 20 * torch.log10(1 / rmse)
