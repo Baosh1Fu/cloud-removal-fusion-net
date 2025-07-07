@@ -58,61 +58,49 @@ class BaseModel(nn.Module):
         self.netG.variance = None
 
     def forward(self):
-        raw_out = self.netG(self.real_A, batch_positions=self.dates)
-
-        if isinstance(raw_out, dict):
-            # 四头输出直接存 dict
-            self.fake_B = raw_out
-            self.netG.variance = None
-        else:
-            # 原接口：拼接后的 Tensor
-            self.fake_B = raw_out
-            self.netG.variance = None
-
-        if self.config.profile:
-            flopstats = FlopCountAnalysis(self.netG, (self.real_A, self.dates))
-            self.flops    = (flopstats.total()*1e-6)/self.config.batch_size
+        # forward through generator, note: for val/test splits, 
+        # 'with torch.no_grad():' is declared in train script
+        self.fake_B = self.netG(self.real_A, batch_positions=self.dates)
+        if self.config.profile: 
+            flopstats  = FlopCountAnalysis(self.netG, (self.real_A, self.dates))
+            # print(flop_count_table(flopstats))
+            # TFLOPS: flopstats.total() *1e-12
+            # MFLOPS: flopstats.total() *1e-6
+            # compute MFLOPS per input sample
+            self.flops = (flopstats.total()*1e-6)/self.config.batch_size
             print(f"MFLOP count: {self.flops}")
+        self.netG.variance = None # purge earlier variance prediction, re-compute via get_loss_G()
 
-    def get_loss_G(self):
-        # 1) 如果是 dict，就按 NIG 四头算 var
-        if isinstance(self.fake_B, dict):
-            delta = self.fake_B['delta']   # [B,1,S2_BANDS,H,W]
-            gamma = self.fake_B['gamma']
-            alpha = self.fake_B['alpha']
-            beta  = self.fake_B['beta']
-
-            eps = 1e-6
-            var = beta / (alpha - 1 + eps)
-
-            preds = delta
-
-        # 2) 否则走老逻辑，用切片取 mean/var
-        else:
-            if hasattr(self.netG, 'vars_idx'):
-                m = self.netG.mean_idx
-                v = self.netG.vars_idx
-                preds = self.fake_B[:, :, :m, ...]
-                var   = self.fake_B[:, :, m:v, ...]
-            else:
-                preds = self.fake_B[:, :, :S2_BANDS, ...]
-                var   = self.fake_B[:, :, S2_BANDS:, ...]
-
-        # 最终调用 calc_loss，interface 完全统一
-        self.loss_G, self.netG.variance = losses.calc_loss(
-            self.criterion,
-            self.config,
-            preds,
-            self.real_B,
-            var=var
-        )
     def backward_G(self):
         # calculate generator loss
         self.get_loss_G()
         self.loss_G.backward()
 
 
-   
+    def get_loss_G(self):
+        if isinstance(self.fake_B, dict):  # NIG 结构
+            self.loss_G, self.netG.variance = losses.calc_loss(
+            self.criterion,
+            self.config,
+            self.fake_B["delta"],
+            self.fake_B["gamma"],
+            self.fake_B["alpha"],
+            self.fake_B["beta"],
+            target=self.real_B
+        )
+        else:
+        # 拆 mean 和 var
+            if hasattr(self.netG, 'vars_idx'):
+                mean = self.fake_B[:, :, :self.netG.mean_idx, ...]
+                var  = self.fake_B[:, :, self.netG.mean_idx:self.netG.vars_idx, ...]
+            else:
+                mean = self.fake_B[:, :, :S2_BANDS, ...]
+                var  = self.fake_B[:, :, S2_BANDS:, ...]
+
+            self.loss_G, self.netG.variance = losses.calc_loss(
+                self.criterion, self.config, mean, self.real_B, var=var
+            )
+
     def set_input(self, input):
         self.real_A = self.scale_by * input['A'].to(self.config.device)
         self.real_B = self.scale_by * input['B'].to(self.config.device)
@@ -135,11 +123,7 @@ class BaseModel(nn.Module):
         # rescale target and mean predictions
         if hasattr(self, 'real_A'): self.real_A = 1/self.scale_by * self.real_A
         self.real_B = 1/self.scale_by * self.real_B 
-        if isinstance(self.fake_B, torch.Tensor):
-            self.fake_B = 1/self.scale_by * self.fake_B[:,:,:S2_BANDS,...]
-        elif isinstance(self.fake_B, dict) and 'delta' in self.fake_B:
-            self.fake_B['delta'] = 1/self.scale_by * self.fake_B['delta']
-
+        self.fake_B = 1/self.scale_by * self.fake_B[:,:,:S2_BANDS,...]
         
         # rescale (co)variances
         if hasattr(self.netG, 'variance') and self.netG.variance is not None:

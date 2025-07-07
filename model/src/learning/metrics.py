@@ -6,6 +6,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.getcwd()))
 sys.path.append(os.path.dirname(os.path.dirname(os.getcwd())))
 from util import pytorch_ssim
+from src.backbones.base_model_fusion import FusionModel
 
 class Metric(object):
     """Base class for all metrics.

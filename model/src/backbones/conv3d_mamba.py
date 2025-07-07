@@ -64,7 +64,7 @@ class MambaBlock(nn.Module):
 
         x_ds = self.downsample(x)
         H2, W2 = H // 2, W // 2
-        x_ds_flat = rearrange(x_ds, 'b d h w -> b s d', s=H2 * W2)
+        x_ds_flat = rearrange(x_ds, 'b d h w -> b (h w) d')
         x_ds_fwd = self.forward_mamba_t2(x_ds_flat)
         x_ds_bwd = torch.flip(self.backward_mamba_t2(torch.flip(x_ds_flat, dims=[1])), dims=[1])
         x_time_ds = 0.5 * (x_ds_fwd + x_ds_bwd)

@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.modules.loss
 from torch.nn.modules.loss import _Loss
 from torch.overrides import has_torch_function_variadic, handle_torch_function
+from src.loss_fusion import FusionCloudLoss
 
 from torch import vmap
 
@@ -12,7 +13,11 @@ S2_BANDS = 13
 
 
 def get_loss(config):
-    if config.loss == "GNLL":
+    if config.loss == "fusion":
+        criterion = FusionCloudLoss(config)
+        print(f"[DEBUG get_loss] → returning FusionCloudLoss instance: {criterion}")
+        return criterion
+    elif config.loss == "GNLL":
         criterion1 = GaussianNLLLoss(reduction='mean', eps=1e-8, full=True)
         criterion = lambda pred, targ, var: criterion1(pred, targ, var)
     elif config.loss == "MGNLL":
@@ -33,8 +38,9 @@ def get_loss(config):
 
 
 def calc_loss(criterion, config, out, y, var=None):
-    
-    if config.loss in ['GNLL']:
+    if config.loss == "fusion":
+        return criterion(out, y, var)
+    elif config.loss in ['GNLL']:
         loss, variance = criterion(out, y, var)
     elif config.loss in ['MGNLL']:
         loss, variance = criterion(out, y, var)
@@ -352,29 +358,3 @@ class MultiGaussianNLLLoss(_Loss):
     
     def forward(self, input: Tensor, target: Tensor, var: Tensor) -> Tensor:
         return multi_gaussian_nll_loss(input, target, var, full=self.full, eps=self.eps, reduction=self.reduction, mode=self.mode, chunk=self.chunk)
-
-from src.loss_fusion import FusionCloudLoss
-
-# 先把原来的函数保存下来
-_original_get_loss  = get_loss
-_original_calc_loss = calc_loss
-
-def get_loss(config):
-    print(f"[DEBUG get_loss] config.loss = {config.loss}")
-    if config.loss == "fusion":
-        module = FusionCloudLoss(config)
-        print(f"[DEBUG get_loss] → returning FusionCloudLoss instance: {module}")
-        return module
-    orig = _original_get_loss(config)
-    print(f"[DEBUG get_loss] → returning original criterion: {orig} (type: {type(orig)})")
-    return orig
-
-def calc_loss(criterion, config, out, y, var=None):
-    #print(f"[DEBUG calc_loss] config.loss = {config.loss}, criterion = {criterion}")
-    if config.loss == "fusion":
-        result = criterion(out, y, var)
-        #print(f"[DEBUG calc_loss] → fusion result = {result}")
-        return result
-    result = _original_calc_loss(criterion, config, out, y, var)
-    #print(f"[DEBUG calc_loss] → original result = {result}")
-    return result

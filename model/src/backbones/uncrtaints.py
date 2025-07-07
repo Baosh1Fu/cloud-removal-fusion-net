@@ -6,7 +6,7 @@ License: MIT
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
 from src.backbones.utae import ConvLayer, ConvBlock, TemporallySharedBlock
 from src.backbones.ltae import LTAE2d, LTAE2dtiny
 
@@ -395,14 +395,14 @@ class UNCRTAINTS(nn.Module):
         # SPATIAL ENCODER
         # collect feature maps in list 'feature_maps'
         out = self.in_conv.smart_forward(input)
-        #print("outshape",out.shape)
+
         for layer in self.in_block:
             out = layer.smart_forward(out)
-        #print("outshape",out.shape)
+
         if not self.is_mono:
             att_down = 32
             down = nn.AdaptiveMaxPool2d((att_down, att_down))(out.view(out.shape[0] * out.shape[1], *out.shape[2:])).view(out.shape[0], out.shape[1], out.shape[2], att_down, att_down)
-            #print("downshape",down.shape)
+
             # TEMPORAL ENCODER
             if self.use_v:
                 v, att = self.temporal_encoder(down, batch_positions=batch_positions, pad_mask=pad_mask)
@@ -442,5 +442,6 @@ class UNCRTAINTS(nn.Module):
         if not self.covmode: return out_loc
 
         out_cov = self.diag_var(out[:,:,self.mean_idx:self.vars_idx,...])           # var predictions > 0
-        out     = torch.cat((out_loc, out_cov), dim=2)                      # stack mean and var predictions plus cloud masks
+        out     = torch.cat((out_loc, out_cov), dim=2)                              # stack mean and var predictions plus cloud masks
+        
         return out

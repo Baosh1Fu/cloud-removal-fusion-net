@@ -577,6 +577,7 @@ def import_from_path(split, config):
 def main(config):
 
     prepare_output(config)
+    print(">>> Current loss function:", config.loss)
     device = torch.device(config.device)
 
     # define data sets
