@@ -16,14 +16,14 @@ def evidential_loss(u, la, alpha, beta, y, weight_reg=1.0):
         + torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
     )
 
-    reg = weight_reg * torch.mean(torch.abs(u - y) * (2 * la + alpha))  # 显式正则项
+    reg = weight_reg * torch.mean(torch.abs(u - y) * (2 * la + alpha))  # Explicit regularization term
     return nll.mean() + reg
 
 
 class FusionCloudLoss(nn.Module):
     """
-    云去除任务三路融合 loss：Evidential Loss + L1 Loss
-    total = evidential + l1，各自按融合权重加和
+    Triple-branch fusion loss for cloud removal: Evidential Loss + L1 Loss
+    total = evidential + l1, each summed according to fusion weights
     """
     def __init__(self, config):
         super().__init__()

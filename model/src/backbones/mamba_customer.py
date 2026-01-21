@@ -54,7 +54,7 @@ class ConvMambaBlock(nn.Module):
         self.d_inner = d_model * expand
         self.d_state = d_state
 
-        # Local 路径（轻量卷积）
+        # Local path (lightweight convolution)
         self.local = (
             nn.Sequential(
                 LightweightModel(d_model, d_model),
@@ -63,7 +63,7 @@ class ConvMambaBlock(nn.Module):
             ) if conv_mode == "deepwise" else nn.Identity()
         )
 
-        # Mamba 前向路径
+        # Mamba forward path
         self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=True)
         self.conv1d = nn.Conv1d(self.d_inner, self.d_inner, d_conv, padding=d_conv - 1, groups=self.d_inner, bias=False)
         nn.init.kaiming_uniform_(self.conv1d.weight, a=0.01, nonlinearity='linear')
@@ -71,7 +71,7 @@ class ConvMambaBlock(nn.Module):
         self.act = nn.SiLU()
         self.norm = nn.LayerNorm(self.d_inner)
 
-        # 状态空间模块
+        # State Space Module (SSM)
         self.x_proj = nn.Linear(self.d_inner, self.d_state * 2 + self.d_inner // 4, bias=False)
         self.dt_proj = nn.Linear(self.d_inner // 4, self.d_inner)
 
@@ -83,7 +83,7 @@ class ConvMambaBlock(nn.Module):
 
     def forward(self, x):
         if x.ndim == 4:
-            # 图像输入 (B, C, H, W)
+            # Image input (B, C, H, W)
             B, C, H, W = x.shape
             L = H * W
             x_in = x
@@ -92,7 +92,7 @@ class ConvMambaBlock(nn.Module):
             x = rearrange(x, "b c h w -> b (h w) c")  # (B, L, C)
 
         elif x.ndim == 3:
-            # 序列输入 (B, L, C)
+            # Sequence input (B, L, C)
             B, L, C = x.shape
             x_in = x
             local = 0
@@ -100,15 +100,15 @@ class ConvMambaBlock(nn.Module):
         else:
             raise ValueError(f"Unsupported input shape: {x.shape}")
 
-        # Mamba 前向路径
+        # Mamba forward path
         xz = rearrange(self.in_proj.weight @ rearrange(x, "b l c -> c (b l)"), "d (b l) -> b d l", b=B)
         x, z = xz.chunk(2, dim=1)
 
         x = self.act(self.conv1d(x)[..., :L])
-        x = torch.clamp(x, -5.0, 5.0)  # 限幅防炸
+        x = torch.clamp(x, -5.0, 5.0)  # Clamping to prevent numerical instability
         x = self.norm(x.transpose(1, 2)).transpose(1, 2)  # (B, D, L)
 
-        # 状态空间参数
+        # SSM parameters
         x_proj = self.x_proj(rearrange(x, "b d l -> (b l) d"))
         dt, B_, C_ = x_proj.split([self.d_inner // 4, self.d_state, self.d_state], dim=-1)
 
@@ -125,7 +125,7 @@ class ConvMambaBlock(nn.Module):
         if x_in.ndim == 4:
             y = rearrange(y, "b (h w) c -> b c h w", h=H, w=W)
 
-        return x_in + y  # 残差连接
+        return x_in + y  # Residual connection
 
 
 class L_GF_Mamba(nn.Module):

@@ -74,3 +74,14 @@ def pad_collate(batch, pad_value=0):
 
 def get_ntrainparams(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def recursive_todevice(x, device):
+    import torch
+    if isinstance(x, torch.Tensor):
+        return x.to(device)
+    elif isinstance(x, dict):
+        return {k: recursive_todevice(v, device) for k, v in x.items()}
+    elif isinstance(x, (list, tuple)):
+        return [recursive_todevice(c, device) for c in x]
+    else:
+        return x

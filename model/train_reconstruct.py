@@ -29,12 +29,13 @@ import torch
 import torchnet as tnt
 from torch.utils.tensorboard import SummaryWriter
 
-from src import utils, losses
+from src import losses
+from src.utils import str2list, recursive_todevice, get_ntrainparams
 from src.learning.weight_init import weight_init
 
 S2_BANDS = 13
 parser   = create_parser(mode='train')
-config   = utils.str2list(parser.parse_args(), list_args=["encoder_widths", "decoder_widths", "out_conv"])
+config   = str2list(parser.parse_args(), list_args=["encoder_widths", "decoder_widths", "out_conv"])
 
 if config.model in['unet', 'utae']:
     assert len(config.encoder_widths) == len(config.decoder_widths)
@@ -77,7 +78,7 @@ if config.resume_from:
             if key in no_overwrite: conf_dict[key] = val
         t_args.__dict__.update(conf_dict)
         config = parser.parse_args(namespace=t_args)
-config = utils.str2list(config, list_args=["encoder_widths", "decoder_widths", "out_conv"])
+config = str2list(config, list_args=["encoder_widths", "decoder_widths", "out_conv"])
 
 # resume at a specified epoch and update optimizer accordingly
 if config.resume_at >= 0:
@@ -147,36 +148,31 @@ def export(arrs, mod, export_dir, file_id=None):
         np.save(os.path.join(export_dir, f'img-{file_id}_{mod}{num}.npy'), arr.cpu())
 
 def prepare_data(batch, device, config):
-    if config.pretrain: return prepare_data_mono(batch, device, config)
-    else: return prepare_data_multi(batch, device, config)
-
-def prepare_data_mono(batch, device, config):
-    x = batch['input']['S2'].to(device).unsqueeze(1)
-    if config.use_sar: 
-        x = torch.cat((batch['input']['S1'].to(device).unsqueeze(1), x), dim=2)
-    m = batch['input']['masks'].to(device).unsqueeze(1)
-    y = batch['target']['S2'].to(device).unsqueeze(1)
-    return x, y, m
-
-def prepare_data_multi(batch, device, config):
-    in_S2       = recursive_todevice(batch['input']['S2'], device)
-    in_S2_td    = recursive_todevice(batch['input']['S2 TD'], device)
-    if config.batch_size>1: in_S2_td = torch.stack((in_S2_td)).T
-    in_m        = torch.stack(recursive_todevice(batch['input']['masks'], device)).swapaxes(0,1)
-    target_S2   = recursive_todevice(batch['target']['S2'], device)
-    y           = torch.cat(target_S2,dim=0).unsqueeze(1)
-
-    if config.use_sar: 
-        in_S1 = recursive_todevice(batch['input']['S1'], device)
-        in_S1_td = recursive_todevice(batch['input']['S1 TD'], device)
-        if config.batch_size>1: in_S1_td = torch.stack((in_S1_td)).T
-        x     = torch.cat((torch.stack(in_S1,dim=1), torch.stack(in_S2,dim=1)),dim=2)
-        dates = torch.stack((torch.tensor(in_S1_td),torch.tensor(in_S2_td))).float().mean(dim=0).to(device)
+    if config.pretrain:
+        x = batch['input']['S2'].to(device, non_blocking=True).unsqueeze(1)
+        if config.use_sar: 
+            x = torch.cat((batch['input']['S1'].to(device, non_blocking=True).unsqueeze(1), x), dim=2)
+        m = batch['input']['masks'].to(device, non_blocking=True).unsqueeze(1)
+        y = batch['target']['S2'].to(device, non_blocking=True).unsqueeze(1)
+        return x, y, m, None
     else:
-        x     = torch.stack(in_S2,dim=1)
-        dates = torch.tensor(in_S2_td).float().to(device)
-    
-    return x, y, in_m, dates
+        in_S2 = recursive_todevice(batch['input']['S2'], device)
+        in_S2_td = recursive_todevice(batch['input']['S2 TD'], device)
+        if config.batch_size > 1: in_S2_td = torch.stack(in_S2_td).T
+        in_m = torch.stack(recursive_todevice(batch['input']['masks'], device)).swapaxes(0, 1)
+        y = torch.cat(recursive_todevice(batch['target']['S2'], device), dim=0).unsqueeze(1)
+
+        if config.use_sar: 
+            in_S1 = recursive_todevice(batch['input']['S1'], device)
+            in_S1_td = recursive_todevice(batch['input']['S1 TD'], device)
+            if config.batch_size > 1: in_S1_td = torch.stack(in_S1_td).T
+            x = torch.cat((torch.stack(in_S1, dim=1), torch.stack(in_S2, dim=1)), dim=2)
+            dates = torch.stack((torch.tensor(in_S1_td), torch.tensor(in_S2_td))).float().mean(dim=0).to(device)
+        else:
+            x = torch.stack(in_S2, dim=1)
+            dates = torch.tensor(in_S2_td).float().to(device)
+        
+        return x, y, in_m, dates
 
 
 def log_aleatoric(writer, config, mode, step, var, name, img_meter=None):
@@ -278,127 +274,108 @@ def continuous_matshow(data, min=0, max=1):
 
 def iterate(model, data_loader, config, writer, mode="train", epoch=None, device=None):
     if len(data_loader) == 0: raise ValueError("Received data loader with zero samples!")
-    # loss meter, needs 1 meter per scalar (see https://tnt.readthedocs.io/en/latest/_modules/torchnet/meter/averagevaluemeter.html);
     loss_meter = tnt.meter.AverageValueMeter()
-    img_meter  = avg_img_metrics()
+    img_meter = avg_img_metrics()
 
-    # collect sample-averaged uncertainties and errors
-    errs, errs_se, errs_ae,  vars_aleatoric= [], [], [], []
-
+    errs, errs_se, errs_ae, vars_aleatoric = [], [], [], []
     t_start = time.time()
-    for i, batch in enumerate(tqdm(data_loader)):
-        step = (epoch-1)*len(data_loader)+i
 
-        if config.sample_type == 'cloudy_cloudfree':
-            x, y, in_m, dates = prepare_data(batch, device, config)
-        elif config.sample_type == 'pretrain':
-            x, y, in_m = prepare_data(batch, device, config)
-            dates = None
-        else:
-            raise NotImplementedError
+    for i, batch in enumerate(tqdm(data_loader)):
+        step = (epoch - 1) * len(data_loader) + i
+        
+        # Unified data preparation
+        x, y, in_m, dates = prepare_data(batch, device, config)
         inputs = {'A': x, 'B': y, 'dates': dates, 'masks': in_m}
 
-
-        if mode != "train": # val or test
+        if mode != "train":
             with torch.no_grad():
-                # compute single-model mean and variance predictions
                 model.set_input(inputs)
                 model.forward()
                 model.get_loss_G()
                 model.rescale()
+                
+                # Robust extraction of output and variance
                 out = model.fake_B
-                if hasattr(model.netG, 'variance') and model.netG.variance is not None:
-                    var = model.netG.variance
-                    model.netG.variance = None
-                else:
+                var = getattr(model.netG, 'variance', None)
+                
+                # If variance wasn't set explicitly, try to extract it from concatenated output
+                if var is None and out.shape[2] > S2_BANDS:
                     var = out[:, :, S2_BANDS:, ...]
-                out = out[:, :, :S2_BANDS, ...]
-                batch_size = y.size()[0]
+                
+                # Ensure output only contains predicted bands
+                if out.shape[2] > S2_BANDS:
+                    out = out[:, :, :S2_BANDS, ...]
+                
+                batch_size = y.size(0)
 
                 for bdx in range(batch_size):
-                    # only compute statistics on variance estimates if using e.g. NLL loss or combinations thereof
-                    
-                    if config.loss in ['GNLL', 'MGNLL' ]:
+                    if config.loss in ['GNLL', 'MGNLL']:
+                        if len(var.shape) > 5:  # covariance tensor
+                            var_diag = var.diagonal(dim1=2, dim2=3).moveaxis(-1, 2)
+                        else:
+                            var_diag = var
                         
-                        # if the variance variable is of shape [B x 1 x C x C x H x W] then it's a covariance tensor
-                        if len(var.shape) > 5: 
-                            covar = var
-                            # get [B x 1 x C x H x W] variance tensor
-                            var   = var.diagonal(dim1=2, dim2=3).moveaxis(-1,2)
-                        #print('model',model)
-                        extended_metrics = img_metrics(y[bdx], out[bdx], var=var[bdx], model=model)
-                        vars_aleatoric.append(extended_metrics['mean var']) 
+                        extended_metrics = img_metrics(y[bdx], out[bdx], var=var_diag[bdx], model=model)
+                        vars_aleatoric.append(extended_metrics['mean var'])
                         errs.append(extended_metrics['error'])
                         errs_se.append(extended_metrics['mean se'])
                         errs_ae.append(extended_metrics['mean ae'])
                     else:
-                        extended_metrics = img_metrics(y[bdx], out[bdx],model=model)
+                        extended_metrics = img_metrics(y[bdx], out[bdx], model=model)
                     
                     img_meter.add(extended_metrics)
-                    idx = (i*batch_size+bdx) # plot and export every k-th item
-                    if config.plot_every>0 and idx % config.plot_every == 0:
+                    
+                    idx = i * batch_size + bdx
+                    if config.plot_every > 0 and idx % config.plot_every == 0:
                         plot_dir = os.path.join(config.res_dir, config.experiment_name, 'plots', f'epoch_{epoch}', f'{mode}')
                         plot_img(x[bdx], 'in', plot_dir, file_id=idx)
                         plot_img(out[bdx], 'pred', plot_dir, file_id=idx)
                         plot_img(y[bdx], 'target', plot_dir, file_id=idx)
-                        plot_img(((out[bdx]-y[bdx])**2).mean(1, keepdims=True), 'err', plot_dir, file_id=idx)
+                        plot_img(((out[bdx] - y[bdx])**2).mean(1, keepdims=True), 'err', plot_dir, file_id=idx)
                         plot_img(discrete_matshow(in_m.float().mean(axis=1).cpu()[bdx], n_colors=config.input_t), 'mask', plot_dir, file_id=idx)
-                        if var is not None: plot_img(var.mean(2, keepdims=True)[bdx], 'var', plot_dir, file_id=idx)
-                    if config.export_every>0 and idx % config.export_every == 0:
+                        if var is not None:
+                            var_plot = var.diagonal(dim1=2, dim2=3).moveaxis(-1, 2) if len(var.shape) > 5 else var
+                            plot_img(var_plot.mean(2, keepdims=True)[bdx], 'var', plot_dir, file_id=idx)
+
+                    if config.export_every > 0 and idx % config.export_every == 0:
                         export_dir = os.path.join(config.res_dir, config.experiment_name, 'export', f'epoch_{epoch}', f'{mode}')
                         export(out[bdx], 'pred', export_dir, file_id=idx)
                         export(y[bdx], 'target', export_dir, file_id=idx)
-                        if var is not None: 
-                            try: export(covar[bdx], 'covar', export_dir, file_id=idx)
-                            except: export(var[bdx], 'var', export_dir, file_id=idx)
-        else: # training
-            
-            # compute single-model mean and variance predictions
+                        if var is not None:
+                            export(var[bdx], 'var' if len(var.shape) <= 5 else 'covar', export_dir, file_id=idx)
+        else:  # Training mode
             model.set_input(inputs)
-            model.optimize_parameters() # not using model.forward() directly
-            out    = model.fake_B.detach().cpu()
-
-            # read variance predictions stored on generator
-            if hasattr(model.netG, 'variance') and model.netG.variance is not None:
-                var = model.netG.variance.cpu()
-            else:
+            model.optimize_parameters()
+            
+            out = model.fake_B.detach().cpu()
+            var = getattr(model.netG, 'variance', None)
+            if var is not None:
+                var = var.detach().cpu()
+            elif out.shape[2] > S2_BANDS:
                 var = out[:, :, S2_BANDS:, ...]
-            out = out[:, :, :S2_BANDS, ...]
+            
+            if out.shape[2] > S2_BANDS:
+                out = out[:, :, :S2_BANDS, ...]
 
-            if config.plot_every>0:
-                plot_out = out.detach().clone()
-                batch_size = y.size()[0]
+            if config.plot_every > 0:
+                batch_size = y.size(0)
                 for bdx in range(batch_size):
-                    idx = (i*batch_size+bdx) # plot and export every k-th item
+                    idx = i * batch_size + bdx
                     if idx % config.plot_every == 0:
                         plot_dir = os.path.join(config.res_dir, config.experiment_name, 'plots', f'epoch_{epoch}', f'{mode}')
                         plot_img(x[bdx], 'in', plot_dir, file_id=i)
-                        plot_img(plot_out[bdx], 'pred', plot_dir, file_id=i)
+                        plot_img(out[bdx], 'pred', plot_dir, file_id=i)
                         plot_img(y[bdx], 'target', plot_dir, file_id=i)
 
-        if mode == "train":
-            # periodically log stats
-            if step%config.display_step==0:
-                out, x, y, in_m = out.cpu(), x.cpu(), y.cpu(), in_m.cpu()
-                if config.loss in ['GNLL', 'MGNLL' ]:
-                    var = var.cpu()
-                    log_train(writer, config, model, step, x, out, y, in_m, var=var)
-                else:
-                    log_train(writer, config, model, step, x, out, y, in_m)
+            if step % config.display_step == 0:
+                log_train(writer, config, model, step, x.cpu(), out, y.cpu(), in_m.cpu(), var=var if config.loss in ['GNLL', 'MGNLL'] else None)
                 if hasattr(model, 'aux_info'):
                     aux = model.aux_info
-                    print(f"[AUX INFO] Epoch {epoch}, Step {step} | "
-                        f"loss_un: {aux['loss_un']:.4f}, "
-                        f"loss_mamba: {aux['loss_mamba']:.4f}, "
-                        f"loss_fused: {aux['loss_fused']:.4f}")
+                    for k, v in aux.items():
+                        writer.add_scalar(f'train/{k}', v, step)
+                    print(f"[AUX INFO] Epoch {epoch}, Step {step} | " + ", ".join([f"{k}: {v:.4f}" for k, v in aux.items()]))
 
-                    writer.add_scalar('train/loss_un',     aux['loss_un'], step)
-                    writer.add_scalar('train/loss_mamba',  aux['loss_mamba'], step)
-                    writer.add_scalar('train/loss_fused',  aux['loss_fused'], step)
-        # log the loss, computed via model.backward_G() at train time & via model.get_loss_G() at val/test time
         loss_meter.add(model.loss_G.item())
-
-        # after each batch, close any leftover figures
         plt.close('all')
 
     # --- end of epoch ---
@@ -539,15 +516,6 @@ def compute_uce_auce(var, errors, n_samples, percent=5, l2=True, mode='val', ste
     return uce, auce
 
 
-def recursive_todevice(x, device):
-    if isinstance(x, torch.Tensor):
-        return x.to(device)
-    elif isinstance(x, dict):
-        return {k: recursive_todevice(v, device) for k, v in x.items()}
-    else:
-        return [recursive_todevice(c, device) for c in x]
-
-
 def prepare_output(config):
     os.makedirs(os.path.join(config.res_dir, config.experiment_name), exist_ok=True)
 
@@ -581,14 +549,25 @@ def main(config):
     device = torch.device(config.device)
 
     # define data sets
-    if config.pretrain: # pretrain / training on mono-temporal data
-        dt_train    = SEN12MSCR(os.path.expanduser(config.root3), split='train', region=config.region, sample_type=config.sample_type)
-        dt_val      = SEN12MSCR(os.path.expanduser(config.root3), split='val', region=config.region, sample_type=config.sample_type) 
-        dt_test     = SEN12MSCR(os.path.expanduser(config.root3), split='test', region=config.region, sample_type=config.sample_type)
+    data_common_kwargs = {
+        'region': config.region,
+        'sample_type': config.sample_type
+    }
+    
+    if config.pretrain:
+        dt_train = SEN12MSCR(os.path.expanduser(config.root3), split='train', **data_common_kwargs)
+        dt_val = SEN12MSCR(os.path.expanduser(config.root3), split='val', **data_common_kwargs) 
+        dt_test = SEN12MSCR(os.path.expanduser(config.root3), split='test', **data_common_kwargs)
     else:
-        dt_train    = SEN12MSCRTS(os.path.expanduser(config.root1), split='train', region=config.region, sample_type=config.sample_type, sampler = 'random' if config.vary_samples else 'fixed', n_input_samples=config.input_t, import_data_path=import_from_path('train', config), min_cov=config.min_cov, max_cov=config.max_cov)
-        dt_val      = SEN12MSCRTS(os.path.expanduser(config.root2), split='val', region='all', sample_type=config.sample_type , n_input_samples=config.input_t, import_data_path=import_from_path('val', config)) 
-        dt_test     = SEN12MSCRTS(os.path.expanduser(config.root2), split='test', region='all', sample_type=config.sample_type , n_input_samples=config.input_t, import_data_path=import_from_path('test', config))
+        ts_kwargs = {
+            'sampler': 'random' if config.vary_samples else 'fixed',
+            'n_input_samples': config.input_t,
+            'min_cov': config.min_cov,
+            'max_cov': config.max_cov
+        }
+        dt_train = SEN12MSCRTS(os.path.expanduser(config.root1), split='train', import_data_path=import_from_path('train', config), **data_common_kwargs, **ts_kwargs)
+        dt_val = SEN12MSCRTS(os.path.expanduser(config.root2), split='val', region='all', sample_type=config.sample_type, n_input_samples=config.input_t, import_data_path=import_from_path('val', config)) 
+        dt_test = SEN12MSCRTS(os.path.expanduser(config.root2), split='test', region='all', sample_type=config.sample_type, n_input_samples=config.input_t, import_data_path=import_from_path('test', config))
 
     # wrap to allow for subsampling, e.g. for test runs etc
     dt_train    = torch.utils.data.Subset(dt_train, range(0, min(config.max_samples_count, len(dt_train), int(len(dt_train)*config.max_samples_frac))))
@@ -627,7 +606,7 @@ def main(config):
     # set model properties
     model.len_epoch = len(train_loader)
 
-    config.N_params = utils.get_ntrainparams(model)
+    config.N_params = get_ntrainparams(model)
     print("\n\nTrainable layers:")
     for name, p in model.named_parameters():
         if p.requires_grad: print(f"\t{name}")

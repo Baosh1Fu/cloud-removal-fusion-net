@@ -78,7 +78,7 @@ class BaseModel(nn.Module):
 
 
     def get_loss_G(self):
-        if isinstance(self.fake_B, dict):  # NIG 结构
+        if isinstance(self.fake_B, dict):  # NIG structure
             self.loss_G, self.netG.variance = losses.calc_loss(
             self.criterion,
             self.config,
@@ -89,7 +89,7 @@ class BaseModel(nn.Module):
             target=self.real_B
         )
         else:
-        # 拆 mean 和 var
+        # Split mean and var
             if hasattr(self.netG, 'vars_idx'):
                 mean = self.fake_B[:, :, :self.netG.mean_idx, ...]
                 var  = self.fake_B[:, :, self.netG.mean_idx:self.netG.vars_idx, ...]

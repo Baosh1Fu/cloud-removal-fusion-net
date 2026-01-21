@@ -112,19 +112,6 @@ def get_generator(config):
                 block_type=config.block_type,
                 is_mono=config.pretrain
             )
-
-    elif config.model == 'uncrtaints_convmamba':
-        model = uncrtaints_convmamba.UNCRTAINTS_CONVMAMBA(
-            input_dim=S1_BANDS * config.use_sar + S2_BANDS,
-            encoder_widths=config.encoder_widths,
-            out_conv=config.out_conv,
-            out_nonlin_mean=config.mean_nonLinearity,
-            out_nonlin_var=config.var_nonLinearity,
-            pad_value=config.pad_value,
-            covmode=config.covmode,
-            scale_by=config.scale_by,
-            separate_out=config.separate_out
-        )
     elif 'uncrtaints_fusion' == config.model:
         model = uncrtaints_fusion.UNCRTAINTS(
                 input_dim=S1_BANDS*config.use_sar+S2_BANDS,
@@ -160,8 +147,10 @@ def get_generator(config):
             scale_by=config.scale_by,
             out_nonlin_mean=config.mean_nonLinearity,
             out_nonlin_var=config.var_nonLinearity 
-            #norm_type=config.norm_type  
+            #norm_type=config.norm_type  
             )
+    elif 'mamba_fusion' == config.model:
+        model = mamba_fusion.MambaFusion(config)
     elif config.model == 'fusion_net':
         model = fusion_net.FusionUNCRTAINTS(config)
     else: raise NotImplementedError

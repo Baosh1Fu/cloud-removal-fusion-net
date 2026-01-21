@@ -14,6 +14,8 @@ class FusionModel(BaseModel):
         self.out_fused  = {k: self.net_out[f"{k}_fuse"] for k in ("delta","gamma","alpha","beta")}
         self.y_img = self.real_B  # Tensor[B, S2_BANDS, H, W]
         self.fake_B = self.net_out['delta_fuse']
+        # Set variance for iterate() to find
+        self.netG.variance = self.net_out['total_uncertainty_fuse']
     def get_loss_G(self):
         total_loss, aux = self.criterion(
             self.out_un,

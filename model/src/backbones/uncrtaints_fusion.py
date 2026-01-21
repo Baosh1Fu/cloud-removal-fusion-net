@@ -229,7 +229,7 @@ def get_nonlinearity(mode, eps):
 
 
 
-# 全局常量：光学波段数量
+# Global constant: number of optical bands
 S2_BANDS = 13
 class NIGHead(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, eps=1e-6):
