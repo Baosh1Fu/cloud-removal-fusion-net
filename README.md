@@ -9,7 +9,7 @@ This project is an extension of the original [UnCRtainTS](https://github.com/Pat
 Based on the original UnCRtainTS model, this project makes the following extensions:
 
 - **Four-parameter NIG Output**: Modified the output from the original `mean + variance` to a more complete **Normal-Inverse-Gamma (NIG) distribution** with four parameters (`delta`, `gamma`, `alpha`, `beta`), supporting Evidential Learning.
-- **conv3d_mamba Architecture**: Designed a new network structure `conv3d_mamba` that combines the spatial modeling capability of Conv3D with the temporal modeling capability of Mamba to better handle the time-series characteristics of remote sensing images.
+- **mamba Architecture**: Designed a new network structure `mamba_fusion` that combines the spatial modeling capability of Conv3D with the temporal modeling capability of Mamba to better handle the time-series characteristics of remote sensing images.
 - **fusion_net Model**: Built a fusion model `fusion_net` that performs uncertainty-weighted fusion of `uncrtaints` and `conv3d_mamba` outputs (based on our custom `monig_fusion` method).
 - **Backward Compatibility**: All models retain both original versions and NIG four-parameter versions, maintaining compatibility with the original project and allowing them to run directly on the original training pipeline.
 
@@ -63,19 +63,7 @@ python train_reconstruct.py \
   --device cuda
 ```
 
-*Note: For AutoDL users, ensure data paths point to `/root/autodl-tmp/`.*
 
 ---
 
-## References
 
-If you use this code, please cite the original UnCRtainTS paper:
-```bibtex
-@inproceedings{UnCRtainTS,
-        title = {{UnCRtainTS: Uncertainty Quantification for Cloud Removal in Optical Satellite Time Series}},
-        author = {Ebel, Patrick and Garnot, Vivien Sainte Fare and Schmitt, Michael and Wegner, Jan and Zhu, Xiao Xiang},
-        booktitle = {Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition Workshops},
-        year = {2023},
-        organization = {IEEE}
-}
-```
