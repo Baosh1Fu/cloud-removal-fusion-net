@@ -63,7 +63,7 @@ class Decoder(nn.Module):
 
         delta = self.delta_head(x)
         gamma = self.gamma_head(x)
-        alpha = self.alpha_head(x)
+        alpha = self.alpha_head(x)+1.0
         beta  = self.beta_head(x)
 
         return delta, gamma, alpha, beta
