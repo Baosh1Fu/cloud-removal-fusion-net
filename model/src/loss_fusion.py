@@ -4,10 +4,10 @@ import torch.nn.functional as F
 import numpy as np
 
 
-def evidential_loss(u, la, alpha, beta, y, weight_reg=1.0):
+def evidential_loss(u, la, alpha, beta, y, weight_reg=0.05):
     om = 2 * beta * (1 + la)
     err = u - y
-    maha = torch.sum(la * err ** 2, dim=1, keepdim=True)
+    maha = la * err ** 2
 
     nll = (
         0.5 * torch.log(torch.tensor(np.pi, device=la.device) / la)
@@ -16,7 +16,7 @@ def evidential_loss(u, la, alpha, beta, y, weight_reg=1.0):
         + torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
     )
 
-    reg = weight_reg * torch.mean(torch.abs(u - y) * (2 * la + alpha))  # Explicit regularization term
+    reg = weight_reg * torch.mean(torch.abs(u - y) * (2 * la + alpha))
     return nll.mean() + reg
 
 
@@ -29,10 +29,16 @@ class FusionCloudLoss(nn.Module):
         super().__init__()
         self.lambda1 = getattr(config, 'lambda1', 1.0)
         self.lambda2 = getattr(config, 'lambda2', 1.0)
-        self.weight_reg = getattr(config, 'weight_reg', 0.0)
+        self.weight_reg = getattr(config, 'weight_reg', 0.05)
         self.l1_criterion = nn.SmoothL1Loss()
 
     def forward(self, out_un, out_mamba, out_fused, y_gt):
+        # squeeze time dim [B, 1, C, H, W] → [B, C, H, W]
+        for d in ['delta', 'gamma', 'alpha', 'beta']:
+            out_un[d] = out_un[d].squeeze(1)
+            out_mamba[d] = out_mamba[d].squeeze(1)
+            out_fused[d] = out_fused[d].squeeze(1)
+
         # --- evidential losses ---
         loss_un_evi = evidential_loss(
             out_un['delta'], out_un['gamma'], out_un['alpha'], out_un['beta'],
