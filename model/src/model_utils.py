@@ -3,7 +3,8 @@ import torch
 
 sub_dir = os.path.join(os.getcwd(), 'model')
 if os.path.isdir(sub_dir): os.chdir(sub_dir)
-from src.backbones import base_model_fusion, base_model, utae, uncrtaints, conv3d_mamba, fusion_net, uncrtaints_fusion, mamba_fusion
+from src.backbones import base_model_fusion, base_model, utae, uncrtaints, fusion_net, uncrtaints_fusion
+# conv3d_mamba, mamba_fusion 延迟导入（依赖 mamba_ssm，Blackwell GPU 环境下不可用）
 from src.backbones.base_model_fusion import FusionModel
 from src.backbones.base_model import BaseModel
 import math
@@ -137,6 +138,7 @@ def get_generator(config):
                 is_mono=config.pretrain
             )
     elif 'conv3d_mamba' == config.model:
+        from src.backbones import conv3d_mamba
         model = conv3d_mamba.UNCRTAINTS_Mamba3D(
             input_dim=S1_BANDS*config.use_sar+S2_BANDS,
             output_dim=13, 
@@ -150,6 +152,7 @@ def get_generator(config):
             #norm_type=config.norm_type  
             )
     elif 'mamba_fusion' == config.model:
+        from src.backbones import mamba_fusion
         model = mamba_fusion.MambaFusion(config)
     elif config.model == 'fusion_net':
         model = fusion_net.FusionUNCRTAINTS(config)

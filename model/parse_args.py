@@ -88,6 +88,11 @@ def create_parser(mode='train'):
     parser.add_argument("--scale_by", default=1.0, type=float, help="rescale data within model, e.g. to [0,10]")
     parser.add_argument("--separate_out", dest="separate_out", action="store_true", help="whether to separately process mean and variance predictions or in a shared layer")
 
+    # flags for fusion_net loss
+    parser.add_argument("--weight_reg", default=0.05, type=float, help="regularization weight for evidential loss")
+    parser.add_argument("--lambda1", default=1.0, type=float, help="weight for mamba branch loss")
+    parser.add_argument("--lambda2", default=1.0, type=float, help="weight for UN branch loss")
+
     # flags specific for testing
     parser.add_argument("--weight_folder", type=str, default="./results", help="Path to the main folder containing the pre-trained weights")
     parser.add_argument("--use_custom", dest="use_custom", action="store_true", help="whether to test on individually specified patches or not")

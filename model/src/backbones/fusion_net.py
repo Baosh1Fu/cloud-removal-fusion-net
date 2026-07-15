@@ -5,6 +5,7 @@ from src.backbones import uncrtaints_fusion, mamba_fusion
 class FusionUNCRTAINTS(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.scale_by = config.scale_by
 
         # Number of bands
         S1_BANDS = 2
@@ -61,6 +62,12 @@ class FusionUNCRTAINTS(nn.Module):
         out_un = self.un_model(x, batch_positions)
         out_ma = self.mamba_model(x)
 
+        # --- Apply scale_by to NIG outputs (match target range) --- #
+        scale_by = self.scale_by
+        out_un["delta"] = scale_by * torch.sigmoid(out_un["delta"])
+        out_ma["delta"] = scale_by * torch.sigmoid(out_ma["delta"])
+        out_un["beta"]  = (scale_by ** 2) * out_un["beta"]
+        out_ma["beta"]  = (scale_by ** 2) * out_ma["beta"]
         # --- Read NIG parameters --- #
         u1, la1, a1, b1 = out_un['delta'], out_un['gamma'], out_un['alpha'], out_un['beta']
         u2, la2, a2, b2 = out_ma['delta'], out_ma['gamma'], out_ma['alpha'], out_ma['beta']

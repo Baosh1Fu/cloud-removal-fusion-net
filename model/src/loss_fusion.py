@@ -5,7 +5,13 @@ import numpy as np
 
 
 def evidential_loss(u, la, alpha, beta, y, weight_reg=1.0):
-    om = 2 * beta * (1 + la)
+    # --- Numerical stability: clamp parameters --- #
+    la    = torch.clamp(la, min=1e-4, max=1e4)
+    alpha = torch.clamp(alpha, min=1.0, max=100.0)
+    beta  = torch.clamp(beta, min=1e-4)
+
+    om  = 2 * beta * (1 + la)
+    om  = torch.clamp(om, min=1e-4)
     err = u - y
     maha = torch.sum(la * err ** 2, dim=1, keepdim=True)
 
@@ -16,7 +22,7 @@ def evidential_loss(u, la, alpha, beta, y, weight_reg=1.0):
         + torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
     )
 
-    reg = weight_reg * torch.mean(torch.abs(u - y) * (2 * la + alpha))  # Explicit regularization term
+    reg = weight_reg * torch.mean(torch.abs(u - y) * (2 * la + alpha))
     return nll.mean() + reg
 
 
@@ -29,7 +35,7 @@ class FusionCloudLoss(nn.Module):
         super().__init__()
         self.lambda1 = getattr(config, 'lambda1', 1.0)
         self.lambda2 = getattr(config, 'lambda2', 1.0)
-        self.weight_reg = getattr(config, 'weight_reg', 0.0)
+        self.weight_reg = getattr(config, 'weight_reg', 0.05)
         self.l1_criterion = nn.SmoothL1Loss()
 
     def forward(self, out_un, out_mamba, out_fused, y_gt):

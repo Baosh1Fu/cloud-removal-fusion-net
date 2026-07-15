@@ -281,6 +281,9 @@ class SEN12MSCRTS(Dataset):
                     # working with directory under time stamp tdx
                     path_s1_complete = os.path.join(roi_path, self.modalities[0], str(tdx))
                     path_s2_complete = os.path.join(roi_path, self.modalities[1], str(tdx))
+                    # skip ROI if S1 or S2 directory missing for any time point
+                    if not os.path.isdir(path_s1_complete) or not os.path.isdir(path_s2_complete):
+                        break
 
                     # same as complete paths, truncating root directory's path
                     path_s1 = os.path.join(roi_dir, roi, self.modalities[0], str(tdx))
@@ -297,6 +300,9 @@ class SEN12MSCRTS(Dataset):
                     path_s1_t.append(s1_t)
                     path_s2_t.append(s2_t)
 
+                # skip ROI if not all time points have both S1 and S2 data
+                if len(path_s1_t) != len(self.time_points):
+                    continue
                 # for each patch of the ROI, collect its time points and make this one sample
                 for pdx in range(len(path_s1_t[0])):
                     sample = {"S1": [path_s1_t[tdx][pdx] for tdx in self.time_points],

@@ -114,7 +114,7 @@ if __name__ == "__main__": pprint.pprint(config)
 # instantiate tensorboard logger
 writer = SummaryWriter(os.path.join(os.path.dirname(config.res_dir), "logs", config.experiment_name))
 
-def plot_img(imgs, mod, plot_dir, file_id=None):
+def plot_img(imgs, mod, plot_dir, file_id=None, ref_range=None):
     if not os.path.exists(plot_dir): os.makedirs(plot_dir)
     try:
         imgs = imgs.cpu().numpy()
@@ -122,19 +122,41 @@ def plot_img(imgs, mod, plot_dir, file_id=None):
             time = '' if imgs.shape[0] == 1 else f'_t-{tdx}'
             if mod in ["pred", "in", "target", "s2"]:
                 rgb = [3,2,1] if img.shape[0]==S2_BANDS else [5,4,3]
-                img, val_min, val_max = img[rgb, ...], 0, 1
+                img = img[rgb, ...]
+                # Use ref_range (from target) if provided for consistent display, else own stats
+                if ref_range is not None:
+                    p1, p99 = ref_range
+                else:
+                    p1 = float(np.percentile(img, 1))
+                    p99 = float(np.percentile(img, 99))
+                img = np.clip(img, p1, p99)
+                rng = p99 - p1
+                if rng < 1e-6:
+                    rng = 1e-6
+                img = (img - p1) / rng
+                img = np.clip(img, 0, 1)
+                plt.imsave(os.path.join(plot_dir, f'img-{file_id}_{mod}{time}.png'), np.moveaxis(img,0,-1).squeeze(), dpi=100)
             elif mod == "s1":
                 img, val_min, val_max = img[[0], ...], 0, 1
+                if file_id is not None:
+                    img = img.clip(val_min, val_max)
+                    plt.imsave(os.path.join(plot_dir, f'img-{file_id}_{mod}{time}.png'), np.moveaxis(img,0,-1).squeeze(), dpi=100, cmap='gray', vmin=val_min, vmax=val_max)
             elif mod == "mask":
                 img, val_min, val_max = img[[0], ...], 0, 1
+                if file_id is not None:
+                    img = img.clip(val_min, val_max)
+                    plt.imsave(os.path.join(plot_dir, f'img-{file_id}_{mod}{time}.png'), np.moveaxis(img,0,-1).squeeze(), dpi=100, cmap='gray', vmin=val_min, vmax=val_max)
             elif mod == "err":
-                img, val_min, val_max = img[[0], ...], 0, 0.01
+                img = img[[0], ...]
+                val_max = float(max(img.max(), 0.001))
+                if file_id is not None:
+                    plt.imsave(os.path.join(plot_dir, f'img-{file_id}_{mod}{time}.png'), np.moveaxis(img,0,-1).squeeze(), dpi=100, cmap='hot', vmin=0, vmax=val_max)
             elif mod == "var":
                 img, val_min, val_max = img[[0], ...], 0, 0.000025
+                if file_id is not None:
+                    img = img.clip(val_min, val_max)
+                    plt.imsave(os.path.join(plot_dir, f'img-{file_id}_{mod}{time}.png'), np.moveaxis(img,0,-1).squeeze(), dpi=100, cmap='gray', vmin=val_min, vmax=val_max)
             else: raise NotImplementedError
-            if file_id is not None: # export into file name
-                img = img.clip(val_min, val_max) # note: this only removes outliers, vmin/vmax below do the global rescaling (else doing instance-wise min/max scaling)
-                plt.imsave(os.path.join(plot_dir, f'img-{file_id}_{mod}{time}.png'), np.moveaxis(img,0,-1).squeeze(), dpi=100, cmap='gray', vmin=val_min, vmax=val_max)
     except: 
         if isinstance(imgs, plt.Figure): # the passed argument is a pre-rendered figure
             plt.savefig(os.path.join(plot_dir, f'img-{file_id}_{mod}.png'), dpi=100)
@@ -328,9 +350,15 @@ def iterate(model, data_loader, config, writer, mode="train", epoch=None, device
                     idx = i * batch_size + bdx
                     if config.plot_every > 0 and idx % config.plot_every == 0:
                         plot_dir = os.path.join(config.res_dir, config.experiment_name, 'plots', f'epoch_{epoch}', f'{mode}')
-                        plot_img(x[bdx], 'in', plot_dir, file_id=idx)
-                        plot_img(out[bdx], 'pred', plot_dir, file_id=idx)
-                        plot_img(y[bdx], 'target', plot_dir, file_id=idx)
+                        # Compute target RGB percentile range for consistent display
+                        tgt_rgb = y[bdx].cpu().numpy()
+                        tgt_rgb_flat = tgt_rgb[0] if tgt_rgb.ndim == 4 else tgt_rgb  # squeeze time dim: (1,C,H,W)->(C,H,W)
+                        rgb_idx = [3,2,1] if tgt_rgb_flat.shape[0]==S2_BANDS else [5,4,3]
+                        tgt_rgb_bands = tgt_rgb_flat[rgb_idx]
+                        ref_range = (float(np.percentile(tgt_rgb_bands, 2)), float(np.percentile(tgt_rgb_bands, 98)))
+                        plot_img(x[bdx], 'in', plot_dir, file_id=idx, ref_range=ref_range)
+                        plot_img(out[bdx], 'pred', plot_dir, file_id=idx, ref_range=ref_range)
+                        plot_img(y[bdx], 'target', plot_dir, file_id=idx, ref_range=ref_range)
                         plot_img(((out[bdx] - y[bdx])**2).mean(1, keepdims=True), 'err', plot_dir, file_id=idx)
                         plot_img(discrete_matshow(in_m.float().mean(axis=1).cpu()[bdx], n_colors=config.input_t), 'mask', plot_dir, file_id=idx)
                         if var is not None:
@@ -363,9 +391,21 @@ def iterate(model, data_loader, config, writer, mode="train", epoch=None, device
                     idx = i * batch_size + bdx
                     if idx % config.plot_every == 0:
                         plot_dir = os.path.join(config.res_dir, config.experiment_name, 'plots', f'epoch_{epoch}', f'{mode}')
-                        plot_img(x[bdx], 'in', plot_dir, file_id=i)
-                        plot_img(out[bdx], 'pred', plot_dir, file_id=i)
-                        plot_img(y[bdx], 'target', plot_dir, file_id=i)
+                        # y[bdx] shape: (1, S2_BANDS, H, W) — squeeze time dim for ref_range
+                        tgt_rgb = y[bdx].cpu().numpy()
+                        tgt_rgb_flat = tgt_rgb[0] if tgt_rgb.ndim == 4 else tgt_rgb  # (S2_BANDS, H, W)
+                        rgb_idx = [3,2,1] if tgt_rgb_flat.shape[0]==S2_BANDS else [5,4,3]
+                        tgt_rgb_bands = tgt_rgb_flat[rgb_idx]
+                        ref_range = (float(np.percentile(tgt_rgb_bands, 2)), float(np.percentile(tgt_rgb_bands, 98)))
+                        plot_img(x[bdx], 'in', plot_dir, file_id=i, ref_range=ref_range)
+                        # out[bdx] may lack time dim; ensure shape (T, C, H, W)
+                        out_b = out[bdx]
+                        if out_b.dim() == 3:
+                            out_b = out_b.unsqueeze(0)
+                        # pred uses its own p2/p98 stretch (independent) so structure is visible
+                        # even when pred value range differs from target
+                        plot_img(out_b, 'pred', plot_dir, file_id=i, ref_range=None)
+                        plot_img(y[bdx], 'target', plot_dir, file_id=i, ref_range=ref_range)
 
             if step % config.display_step == 0:
                 log_train(writer, config, model, step, x.cpu(), out, y.cpu(), in_m.cpu(), var=var if config.loss in ['GNLL', 'MGNLL'] else None)
@@ -626,7 +666,8 @@ def main(config):
     print(model)
 
     # Optimizer and Loss
-    model.criterion = losses.get_loss(config)
+    if config.model != 'fusion_net':
+        model.criterion = losses.get_loss(config)
 
     # track best loss, checkpoint at best validation performance
     is_better, best_loss = lambda new, prev: new <= prev, float("inf")

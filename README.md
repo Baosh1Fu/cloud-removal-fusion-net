@@ -44,24 +44,55 @@ All losses are designed based on Evidential Learning theory, supporting simultan
 
 ## Training Command
 
-The following command can be used to train the NIG version of the models (replace `--model` with `uncrtaints`, `conv3d_mamba`, or `fusion_net`):
+The following command trains the fusion model `fusion_net`, which performs uncertainty-weighted fusion of the `uncrtaints` and `conv3d_mamba` branches:
 
 ```bash
 python train_reconstruct.py \
-  --experiment_name my_first_experiment \
-  --model uncrtaints \
+  --experiment_name my_fusionnet_experiment \
+  --model fusion_net \
   --root1 /path/to/SEN12MSCRTS_train \
   --root2 /path/to/SEN12MSCRTS_test \
   --root3 /path/to/SEN12MSCR \
   --input_t 3 \
-  --epochs 20 \
-  --lr 0.001 \
-  --batch_size 4 \
+  --epochs 15 \
+  --lr 0.0005 \
+  --batch_size 2 \
   --scale_by 10.0 \
-  --loss MGNLL \
+  --loss fusion \
+  --weight_reg 0.05 \
+  --lambda1 1.0 \
+  --lambda2 1.0 \
   --use_sar \
   --device cuda
 ```
+
+- `--loss fusion`: the dedicated evidential fusion loss (`FusionCloudLoss`) used by `fusion_net`.
+- `--lambda1` / `--lambda2`: loss weights for the Mamba branch and the UnCRtainTS branch, respectively.
+- `--weight_reg`: regularization weight for the evidential (NIG) loss term.
+
+To instead train a single branch, set `--model` to `uncrtaints` or `conv3d_mamba` and use `--loss MGNLL`.
+
+---
+
+## Validation / Evaluation Command
+
+The following command evaluates a trained `fusion_net` checkpoint on the test split and logs the metrics to `test_metrics.json`. Model hyperparameters (`--model`, `--loss`, `--scale_by`, etc.) are automatically restored from the experiment's `conf.json`, so they do not need to be repeated:
+
+```bash
+python test_reconstruct.py \
+  --experiment_name my_fusionnet_experiment \
+  --weight_folder ./results \
+  --root2 /path/to/SEN12MSCRTS_test \
+  --region all \
+  --input_t 3 \
+  --resume_at -1 \
+  --batch_size 2 \
+  --device cuda
+```
+
+- `--weight_folder` / `--experiment_name`: locate the trained weights and `conf.json` (i.e. `./results/my_fusionnet_experiment`).
+- `--resume_at -1`: load the checkpoint that performed best on the validation split (use a positive epoch number to load a specific epoch instead).
+- `--region`: restrict evaluation to a continent, e.g. `europa`, `america`, `asiaEast`, `asiaWest`, or `all`.
 
 
 ---
